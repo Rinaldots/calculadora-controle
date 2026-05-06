@@ -220,8 +220,8 @@ function App(){
     <header class="border-b border-[var(--line)] bg-[var(--ink-1)]/80 backdrop-blur sticky top-0 z-20">
       <div class="max-w-7xl mx-auto px-6 py-4 flex items-center gap-4 flex-wrap">
         <div class="font-display text-2xl tracking-tight">
-          <span class="italic">Sis</span><span class="text-[var(--amber)]">Con</span>
-          <span class="text-[var(--paper-mute)] text-base ml-2 font-mono uppercase">calculadora</span>
+          <span class="italic">Calculadora</span><span class="text-[var(--amber)]"> controle</span>
+          <span class="text-[var(--paper-mute)] text-base ml-2 font-mono uppercase">V1.0</span>
         </div>
         <div class="flex-1"></div>
         <div class="flex flex-wrap gap-1">
@@ -239,15 +239,8 @@ function App(){
       <section class="grid md:grid-cols-3 gap-6 items-start mb-8">
         <div class="md:col-span-2">
           <p class="chip text-[var(--amber)]">projeto de controladores · contínuo & discreto</p>
-          <h1 class="font-display text-4xl md:text-5xl leading-[0.95] mt-2">
-            Calcule <em class="italic">qualquer</em> controlador
-            <span class="text-[var(--amber)]">a partir das especificações.</span>
-          </h1>
           <p class="mt-4 text-[var(--paper-dim)] max-w-2xl text-[15px]">
-            Defina G(s) e H(s) livremente — coeficientes ou forma fatorada. Escolha o tipo de controlador,
-            o modo de especificar o polo desejado (ζ+ωₙ, Mp+ts ou sd direto) e o método de discretização.
-            Calculadora resolve pelo critério de ângulo + magnitude e mostra cada passo, com verificação numérica,
-            mapa polo-zero, resposta ao degrau e equação de diferenças do controlador discretizado.
+            Defina G(s) e H(s) livremente — coeficientes ou forma fatorada.
           </p>
         </div>
         <div class="panel rounded-md p-5">
