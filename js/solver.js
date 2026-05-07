@@ -5,15 +5,21 @@ function angleGH(GH, sd){
   return angulo(avaliaTF(GH, sd))*180/Math.PI; 
 }
 
+// arredondamento consistente para cálculos exibidos
+const ROUND_DIGITS = 5;
+const roundTo = (x, d=ROUND_DIGITS) => Math.round(x * Math.pow(10, d)) / Math.pow(10, d);
+
 // --- CONTROLADOR PD: Gc(s) = Kc(s+z)
 // adiciona um zero para ajustar o angulo
 function solvePD({GH, sd}){
   const phaseGH = angleGH(GH, sd);
   const phi_z = wrap180(-180 - phaseGH); // angulo necessario do zero
   const phiRad = phi_z*Math.PI/180;
-  const z = Math.abs(Math.cos(phiRad))<1e-10 ? -sd.re : sd.im/Math.tan(phiRad) - sd.re;
-  const magGH = magnitude(avaliaTF(GH, sd));
-  const Kc = 1/(magGH*magAt(sd, z)); // ganho para satisfazer criterio de magnitude
+  let z = Math.abs(Math.cos(phiRad))<1e-10 ? -sd.re : sd.im/Math.tan(phiRad) - sd.re;
+  z = roundTo(z);
+  const magGH = roundTo(magnitude(avaliaTF(GH, sd)));
+  const m = roundTo(magAt(sd, z));
+  const Kc = roundTo(1/(magGH * m)); // ganho para satisfazer criterio de magnitude
   return {
     Gc: {num:[Kc*z, Kc], den:[1]},
     params: { z, Kc, Kp: Kc*z, Kd: Kc, phi_z, phaseGH },
@@ -29,9 +35,11 @@ function solvePI({GH, sd}){
   const phi_sd = angleOf(sd); // angulo do polo desejado
   const phi_z = wrap180(-180 - phaseGH + phi_sd); // ajusta angulo
   const phiRad = phi_z*Math.PI/180;
-  const z = Math.abs(Math.cos(phiRad))<1e-10 ? -sd.re : sd.im/Math.tan(phiRad) - sd.re;
-  const magGH = magnitude(avaliaTF(GH, sd));
-  const Kc = magnitude(sd) / (magGH * magAt(sd, z)); // magnitude
+  let z = Math.abs(Math.cos(phiRad))<1e-10 ? -sd.re : sd.im/Math.tan(phiRad) - sd.re;
+  z = roundTo(z);
+  const magGH = roundTo(magnitude(avaliaTF(GH, sd)));
+  const m = roundTo(magAt(sd, z));
+  const Kc = roundTo(magnitude(sd) / (magGH * m)); // magnitude
   return {
     Gc: {num:[Kc*z, Kc], den:[0,1]},
     params: { z, Kc, Kp: Kc, Ki: Kc*z, phi_z, phaseGH, phi_sd },
@@ -47,10 +55,11 @@ function solvePIDdouble({GH, sd}){
   const phi_sd = angleOf(sd);
   const phi_z = wrap180((-180 - phaseGH + phi_sd)/2); // divide o angulo por 2
   const phiRad = phi_z*Math.PI/180;
-  const z = Math.abs(Math.cos(phiRad))<1e-10 ? -sd.re : sd.im/Math.tan(phiRad) - sd.re;
-  const magGH = magnitude(avaliaTF(GH, sd));
-  const m = magAt(sd, z);
-  const Kc = magnitude(sd) / (magGH * m * m);
+  let z = Math.abs(Math.cos(phiRad))<1e-10 ? -sd.re : sd.im/Math.tan(phiRad) - sd.re;
+  z = roundTo(z);
+  const magGH = roundTo(magnitude(avaliaTF(GH, sd)));
+  const m = roundTo(magAt(sd, z));
+  const Kc = roundTo(magnitude(sd) / (magGH * m * m));
   const numz = multPoli([z,1],[z,1]);
   return {
     Gc: {num: escalaPoli(numz, Kc), den:[0,1]},
@@ -67,10 +76,11 @@ function solvePIDdistinct({GH, sd, z1}){
   const phi_z1 = angleAt(sd, z1);
   const phi_z2 = wrap180(-180 - phaseGH + phi_sd - phi_z1);
   const phiRad = phi_z2*Math.PI/180;
-  const z2 = Math.abs(Math.cos(phiRad))<1e-10 ? -sd.re : sd.im/Math.tan(phiRad) - sd.re;
-  const magGH = magnitude(avaliaTF(GH, sd));
-  const m1 = magAt(sd, z1), m2 = magAt(sd, z2);
-  const Kc = magnitude(sd) / (magGH * m1 * m2);
+  let z2 = Math.abs(Math.cos(phiRad))<1e-10 ? -sd.re : sd.im/Math.tan(phiRad) - sd.re;
+  z2 = roundTo(z2);
+  const magGH = roundTo(magnitude(avaliaTF(GH, sd)));
+  const m1 = roundTo(magAt(sd, z1)), m2 = roundTo(magAt(sd, z2));
+  const Kc = roundTo(magnitude(sd) / (magGH * m1 * m2));
   const numz = multPoli([z1,1],[z2,1]);
   return {
     Gc: {num: escalaPoli(numz, Kc), den:[0,1]},
@@ -86,9 +96,11 @@ function solveAoverSpb({GH, sd}){
   const phaseGH = angleGH(GH, sd);
   const phi_b = wrap180(phaseGH + 180);
   const phiRad = phi_b*Math.PI/180;
-  const b = Math.abs(Math.cos(phiRad))<1e-10 ? -sd.re : sd.im/Math.tan(phiRad) - sd.re;
-  const magGH = magnitude(avaliaTF(GH, sd));
-  const a = magAt(sd, b)/magGH;
+  let b = Math.abs(Math.cos(phiRad))<1e-10 ? -sd.re : sd.im/Math.tan(phiRad) - sd.re;
+  b = roundTo(b);
+  const magGH = roundTo(magnitude(avaliaTF(GH, sd)));
+  const m = roundTo(magAt(sd, b));
+  const a = roundTo(m / magGH);
   return {
     Gc: {num:[a], den:[b,1]},
     params: { a, b, phi_b, phaseGH },
@@ -103,10 +115,11 @@ function solveLeadLagFixedA({GH, sd, a_zero}){
   const phi_a = angleAt(sd, a_zero);
   const phi_b = wrap180(phaseGH + phi_a + 180);
   const phiRad = phi_b*Math.PI/180;
-  const b = Math.abs(Math.cos(phiRad))<1e-10 ? -sd.re : sd.im/Math.tan(phiRad) - sd.re;
-  const magGH = magnitude(avaliaTF(GH, sd));
-  const m_a = magAt(sd, a_zero), m_b = magAt(sd, b);
-  const Kc = m_b / (magGH * m_a);
+  let b = Math.abs(Math.cos(phiRad))<1e-10 ? -sd.re : sd.im/Math.tan(phiRad) - sd.re;
+  b = roundTo(b);
+  const magGH = roundTo(magnitude(avaliaTF(GH, sd)));
+  const m_a = roundTo(magAt(sd, a_zero)), m_b = roundTo(magAt(sd, b));
+  const Kc = roundTo(m_b / (magGH * m_a));
   return {
     Gc: {num: escalaPoli([a_zero,1], Kc), den:[b,1]},
     params: { Kc, a_zero, b, phi_a, phi_b, phaseGH },

@@ -72,7 +72,8 @@ const DEFAULT_STATE = {
   ctrl:'PD', extra:{},
   sdMode:'zeta_wn', mp:10, ts:4, tsTol:5, zeta:0.7, wn:2.0, sdRe:-1.4, sdIm:1.4,
   sdFormat:'re_im', sdLm:1.4,
-  disc:'tustin', T:0.5
+  disc:'tustin', T:0.5,
+  useRoundedKc: true
 };
 
 // codifica e decodifica estado em base64 para salvar na URL
@@ -182,11 +183,18 @@ function App(){
         extras[e.key] = (v===undefined || v===null || v==='') ? e.default : parseFloat(v);
       }
       const sol = ctrlDef.solver({ GH, sd, ...extras });
-      // closed loop
+      // closed loop (also compute from rounded controller for display/plots)
       const cl = lacoFechadoYR(G, H, sol.Gc);
       const ol = multTF(sol.Gc, GH);
-      // verification at sd
-      const v = avaliaTF(ol, sd);
+      // generate rounded version of controller (use 5 display digits)
+      const DISPLAY_DIGITS = 5;
+      const roundToLocal = (x,d=DISPLAY_DIGITS)=>Math.round(x*Math.pow(10,d))/Math.pow(10,d);
+      const roundTF = TF=>({ num: (TF.num||[]).map(c=>roundToLocal(c)), den: (TF.den||[]).map(c=>roundToLocal(c)) });
+      const GcRounded = roundTF(sol.Gc);
+      const clRounded = lacoFechadoYR(G, H, GcRounded);
+      const olRounded = multTF(GcRounded, GH);
+      // verification at sd (use rounded open-loop for verification)
+      const v = avaliaTF(olRounded, sd);
       const verAng = angulo(v)*180/Math.PI;
       const verMag = magnitude(v);
       // GH evaluated at sd (for showing calculation)
@@ -195,22 +203,66 @@ function App(){
       const GH_sd_mag = magnitude(GH_sd);
       const sd_mag = magnitude(sd);
       const ghSteps = calculaPassosGH(GH, sd);
-      // discretization
+      // discretization (use rounded controller coefficients)
       const Tsamp = parseFloat(state.T) || 1;
       const discFn = DISC_METHODS[state.disc].fn;
       let GcZ, errorDisc = null;
+      let GcZRounded = null;
       try { GcZ = discFn(sol.Gc, Tsamp); }
       catch(e){ errorDisc = e.message; }
+      try { GcZRounded = discFn(GcRounded, Tsamp); } catch(e){}
       // Also discretize G·H·Gc (open-loop pulse)
       let GHGcZ = null;
+      let GHGcZRounded = null;
       try { GHGcZ = discFn(ol, Tsamp); } catch(e){}
-      return { G, H, GH, sd, sol, cl, ol, verAng, verMag, GcZ, GHGcZ, errorDisc, Tsamp, GH_sd, GH_sd_angle, GH_sd_mag, sd_mag, ghSteps };
-    } catch(e){ return { error: e.message }; }
-  }, [parsed, state.ctrl, state.extra, state.disc, state.T, sd, hasParseError]);
+      try { GHGcZRounded = discFn(olRounded, Tsamp); } catch(e){}
+      // debug: recompute Kc from normalized Gc (if Kc present) to verify magnitude criterion
+      let debugKc = null;
+      let Kc_display = null;
+      try{
+        const Kc = sol.params && sol.params.Kc;
+        if(Kc !== undefined && isFinite(Kc) && Math.abs(Kc) > 0){
+          const Gc = sol.Gc;
+          const GcNorm = { num: escalaPoli(Gc.num, 1/Kc), den: Gc.den };
+          const magGcNorm = magnitude(avaliaTF(GcNorm, sd));
+          const Kc_expected = 1/(magGcNorm * GH_sd_mag);
+          // also compute Kc using displayed rounded factors (to reproduce TeX shown values)
+          const DISPLAY_DIGITS = 5;
+          const sd_mag_r = Math.round(sd_mag * Math.pow(10, DISPLAY_DIGITS)) / Math.pow(10, DISPLAY_DIGITS);
+          const GH_sd_mag_r = Math.round(GH_sd_mag * Math.pow(10, DISPLAY_DIGITS)) / Math.pow(10, DISPLAY_DIGITS);
+          // product of |s_d + z_i| using roots of Gc numerator
+          let product = 1;
+          try{
+            const roots = raizes(sol.Gc.num || []);
+            const parts = roots.map(r=>Math.hypot(sd.re - r.re, sd.im - r.im));
+            const parts_r = parts.map(p=>Math.round(p * Math.pow(10, DISPLAY_DIGITS)) / Math.pow(10, DISPLAY_DIGITS));
+            product = parts_r.reduce((a,b)=>a*b, 1);
+            Kc_display = sd_mag_r / (GH_sd_mag_r * product);
+            debugKc = { Kc, magGcNorm, Kc_expected, sd_mag_r, GH_sd_mag_r, parts_r, product, Kc_display };
+          } catch(e){ debugKc = { Kc, magGcNorm, Kc_expected, errorParts: e.message } }
+        }
+      } catch(e){ debugKc = { error: e.message }; }
+      
+      // Create controller with displayed (rounded) Kc
+      const GcDisplay = Kc_display && sol.params && sol.params.Kc ? 
+        { num: escalaPoli(GcRounded.num, Kc_display/sol.params.Kc), den: GcRounded.den } 
+        : GcRounded;
+      // Choose final controller based on useRoundedKc setting
+      const GcFinal = state.useRoundedKc ? GcDisplay : sol.Gc;
+      const clFinal = lacoFechadoYR(G, H, GcFinal);
+      const olFinal = multTF(GcFinal, GH);
+      let GcZFinal = null;
+      let GHGcZFinal = null;
+      try { GcZFinal = discFn(GcFinal, Tsamp); } catch(e){}
+      try { GHGcZFinal = discFn(olFinal, Tsamp); } catch(e){}
 
+      return { G, H, GH, sd, sol, cl, ol, GcRounded, clRounded, olRounded, GcDisplay, GcFinal, clFinal, olFinal, verAng, verMag, GcZ, GcZRounded, GcZFinal, GHGcZ, GHGcZRounded, GHGcZFinal, errorDisc, Tsamp, GH_sd, GH_sd_angle, GH_sd_mag, sd_mag, ghSteps, debugKc: debugKc || {} };
+    } catch(e){ return { error: e.message }; }
+  }, [parsed, state.ctrl, state.extra, state.disc, state.T, sd, hasParseError, state.useRoundedKc]);
   // Derived plots
-  const poles = solution && solution.cl ? raizes(solution.cl.den) : [];
-  const zeros = solution && solution.cl ? raizes(solution.cl.num) : [];
+  const poles = solution && solution.clFinal ? raizes(solution.clFinal.den) : [];
+  const zeros = solution && solution.clFinal ? raizes(solution.clFinal.num) : [];
+  const debugKc = solution && solution.debugKc ? solution.debugKc : null;
 
   const ctrlDef = CONTROLLER_TYPES[state.ctrl];
   const discDef = DISC_METHODS[state.disc];
@@ -374,6 +426,8 @@ function App(){
                     </div>
                   </div>
                 `}
+
+              
                 ${state.sdFormat==='re_lm' && html`
                   <div class="grid grid-cols-2 gap-2">
                     <div>
@@ -412,15 +466,34 @@ function App(){
             <p class="mt-2 text-xs text-[var(--paper-mute)] font-mono">${discDef.sub}</p>
           </div>
 
+          <!-- Rounding option -->
+          <div class="panel rounded-md p-5">
+            <p class="chip text-[var(--paper-mute)]">cálculos</p>
+            <div class="mt-2 flex gap-1 flex-wrap">
+              ${[
+                [true, 'Kc arredondado'],
+                [false, 'Kc exato']
+              ].map(([val,label])=> html`
+                <button class=${`pill ${state.useRoundedKc===val?'pill-on':''}`} onClick=${()=>upd({useRoundedKc:val})}>${label}</button>
+              `)}
+            </div>
+          </div>
+
           <!-- Snapshot -->
           ${solution && !solution.error && html`
             <div class="panel rounded-md p-5">
               <p class="chip text-[var(--paper-mute)]">snapshot</p>
               <div class="mt-3">
                 <${KV} k="sd" v=${`${formata(sd.re,3)} + j${formata(sd.im,3)}`}/>
-                ${Object.entries(solution.sol.params).filter(([k])=>!['phaseGH','phi_sd','phi_z','phi_b','phi_z1','phi_z2','phi_a'].includes(k)).map(([k,v])=> html`
+                ${Object.entries(solution.sol.params).filter(([k])=>!['Kc','phaseGH','phi_sd','phi_z','phi_b','phi_z1','phi_z2','phi_a'].includes(k)).map(([k,v])=> html`
                   <${KV} k=${k} v=${formata(v,5)}/>
                 `)}
+                ${state.useRoundedKc && solution.debugKc && solution.debugKc.Kc_display !== undefined && html`
+                  <${KV} k="Kc (valores arredondados)" v=${formata(solution.debugKc.Kc_display,5)}/>
+                `}
+                ${!state.useRoundedKc && solution.sol.params.Kc !== undefined && html`
+                  <${KV} k="Kc (exato)" v=${formata(solution.sol.params.Kc,5)}/>
+                `}
               </div>
               <div class="mt-3 pt-3 border-t border-dashed border-[var(--line)]">
                 <p class="chip text-[var(--paper-mute)]">verificação no sd</p>
@@ -544,13 +617,18 @@ function App(){
                 <${Tex} display=${true} tex=${`= \\sqrt{${formata(solution.GH_sd.re,5)}^2 + ${formata(solution.GH_sd.im,5)}^2}`}/>
                 <${Tex} display=${true} tex=${`= \\sqrt{${formata(solution.GH_sd.re*solution.GH_sd.re,8)} + ${formata(solution.GH_sd.im*solution.GH_sd.im,8)}}`}/>
                 <${Tex} display=${true} tex=${`= ${formata(solution.GH_sd_mag,5)}`}/>
-                ${solution.sol.params.Kc !== undefined && html`
+                ${((debugKc && debugKc.Kc_display !== undefined) || solution.sol.params.Kc) && html`
                   <p class="mt-3">Magnitude de s_d:</p>
                   <${Tex} display=${true} tex=${`|s_d| = \\sqrt{(${formata(sd.re,5)})^2 + (${formata(sd.im,5)})^2} = \\sqrt{${formata(sd.re*sd.re,8)} + ${formata(sd.im*sd.im,8)}} = ${formata(solution.sd_mag,5)}`}/>
                   <p class="mt-3">Ganho necessário (critério de magnitude):</p>
-                  <${Tex} display=${true} tex=${`K_c = \\dfrac{|s_d|}{|GH(s_d)| \\cdot \\prod |s_d + z_i|} = \\dfrac{${formata(solution.sd_mag,5)}}{${formata(solution.GH_sd_mag,5)} \\cdot \\prod |s_d + z_i|} = ${formata(solution.sol.params.Kc,5)}`}/>
+                  ${state.useRoundedKc && solution.debugKc.Kc_display !== undefined && html`
+                    <${Tex} display=${true} tex=${`K_c = \\dfrac{|s_d|}{|GH(s_d)| \\cdot \\prod |s_d + z_i|} = \\dfrac{${formata(solution.sd_mag,5)}}{${formata(solution.GH_sd_mag,5)} \\cdot \\prod |s_d + z_i|} = ${formata(solution.debugKc.Kc_display,5)}`}/>
+                  `}
+                  ${!state.useRoundedKc && solution.sol.params.Kc && html`
+                    <${Tex} display=${true} tex=${`K_c = \\dfrac{|s_d|}{|GH(s_d)| \\cdot \\prod |s_d + z_i|} = ${formata(solution.sol.params.Kc,5)}`}/>
+                  `}
                 `}
-                ${solution.sol.params.a !== undefined && solution.sol.params.b !== undefined && solution.sol.params.Kc===undefined && html`
+                ${solution.sol.params.a !== undefined && solution.sol.params.b !== undefined && solution.debugKc.Kc_display===undefined && html`
                   <p class="mt-3">Magnitude de (s_d + b):</p>
                   <${Tex} display=${true} tex=${`|s_d+b| = \\sqrt{(${formata(sd.re,5)}+${formata(solution.sol.params.b,5)})^2 + (${formata(sd.im,5)})^2}`}/>
                   <${Tex} display=${true} tex=${`= \\sqrt{${formata(sd.re+solution.sol.params.b,5)}^2 + ${formata(sd.im,5)}^2}`}/>
@@ -561,30 +639,65 @@ function App(){
                 `}
               </${Section}>
 
+              ${state.useRoundedKc && debugKc && debugKc.Kc_display !== undefined && html`
+                <${Section} n="4.1" title="Detalhamento: produto de |s_d + z_i|">
+                  ${(() => {
+                    try{
+                      const zerosGc = raizes(solution.sol.Gc.num || []);
+                      if(!zerosGc || zerosGc.length===0) return html`<p class="text-xs text-[var(--paper-mute)]">Nenhum zero no numerador (produto vazio).</p>`;
+                      const parts = zerosGc.map((r,i)=>{
+                        const re = sd.re - r.re;
+                        const im = sd.im - r.im;
+                        const mag = Math.hypot(re, im);
+                        return { r, re, im, mag };
+                      });
+                      const product = parts.reduce((p,x)=>p*x.mag, 1);
+                      return html`
+                        <div class="text-xs font-mono space-y-2">
+                          ${parts.map((p,i)=> html`
+                            <div>
+                              <${Tex} display=${true} tex=${`|s_d - (${formata(p.r.re,5)} + j\,${formata(p.r.im,5)})| = \\sqrt{(${formata(p.re,5)})^2 + (${formata(p.im,5)})^2} = ${formata(p.mag,5)}`}/>
+                            </div>
+                          `)}
+                          <div>
+                            <${Tex} display=${true} tex=${`\\prod_{i=1}^{${parts.length}} |s_d + z_i| = ${parts.map(p=>formata(p.mag,5)).join(' \\cdot ')} = ${formata(product,5)}`}/>
+                          </div>
+                          <div>
+                            <${Tex} display=${true} tex=${`K_c = \\dfrac{|s_d|}{|GH(s_d)| \\cdot \\prod |s_d + z_i|} = \\dfrac{${formata(solution.sd_mag,5)}}{${formata(solution.GH_sd_mag,5)} \\cdot ${formata(product,5)}} = ${formata(solution.debugKc.Kc_display,5)}`}/>
+                          </div>
+                        </div>
+                      `;
+                    } catch(e){
+                      return html`<p class="text-xs text-[var(--rose)]">erro no detalhamento: ${e.message}</p>`;
+                    }
+                  })()}
+                </${Section}>
+              `}
+
               <${Section} n="5" title="Controlador final no contínuo">
                 <${Tex} display=${true} tex=${`\\boxed{\\,${solution.sol.formula}\\,}`}/>
-                <p class="mt-2">Forma racional:</p>
-                <${Tex} display=${true} tex=${`G_c(s) = ${tfEmTex(solution.sol.Gc)}`}/>
+                <p class="mt-2">Forma racional${state.useRoundedKc ? ' (com Kc arredondado)' : ' (Kc exato)'}:</p>
+                <${Tex} display=${true} tex=${`G_c(s) = ${tfEmTex(solution.GcFinal || solution.sol.Gc)}`}/>
               </${Section}>
 
               <${Section} n="6" title="Malha fechada y/r">
-                <${Tex} display=${true} tex=${`\\dfrac{Y(s)}{R(s)} = \\dfrac{G_c\\,G}{1 + G_c\\,G\\,H} = ${tfEmTex(solution.cl)}`}/>
+                <${Tex} display=${true} tex=${`\\dfrac{Y(s)}{R(s)} = \\dfrac{G_c\\,G}{1 + G_c\\,G\\,H} = ${tfEmTex(solution.clFinal || solution.cl)}`}/>
               </${Section}>
 
               <${Section} n="7" title=${`Discretização · ${discDef.label} · T = ${state.T}s`}>
                 <p>Substituição: <${Tex} tex=${discDef.sub}/></p>
                 ${solution.errorDisc && html`<p class="text-[var(--rose)] font-mono text-sm">erro: ${solution.errorDisc}</p>`}
-                ${solution.GcZ && html`
-                  <p class="mt-2">Controlador discretizado:</p>
-                  <${Tex} display=${true} tex=${`G_c(z) = ${tfEmTex(solution.GcZ,'z')}`}/>
+                ${solution.GcZFinal && html`
+                  <p class="mt-2">Controlador discretizado${state.useRoundedKc ? ' (a partir dos coeficientes com Kc arredondado)' : ' (Kc exato)'}:</p>
+                  <${Tex} display=${true} tex=${`G_c(z) = ${tfEmTex(solution.GcZFinal,'z')}`}/>
                   <p class="text-[var(--paper-mute)] text-sm italic mt-2">Equação de diferenças (e[k] = entrada de erro, u[k] = saída de controle):</p>
-                  <${Tex} display=${true} tex=${diffEq(solution.GcZ, 'u', 'e')}/>
+                  <${Tex} display=${true} tex=${diffEq(solution.GcZFinal, 'u', 'e')}/>
                 `}
-                ${solution.GHGcZ && html`
+                ${solution.GHGcZFinal && html`
                   <details class="mt-3">
                     <summary class="chip text-[var(--paper-mute)] hover:text-[var(--amber)]">também discretizar {G(s)·H(s)·G_c(s)} →</summary>
                     <div class="mt-3">
-                      <${Tex} display=${true} tex=${`\\{G(s)H(s)G_c(s)\\}_z = ${tfEmTex(solution.GHGcZ,'z')}`}/>
+                      <${Tex} display=${true} tex=${`\{G(s)H(s)G_c(s)\}_z = ${tfEmTex(solution.GHGcZFinal,'z')}`}/>
                     </div>
                   </details>
                 `}
@@ -599,7 +712,7 @@ function App(){
                   </div>
                   <div>
                     <p class="text-xs text-[var(--paper-mute)] chip mb-2">resposta ao degrau</p>
-                    <${StepPlot} T=${solution.cl}/>
+                    <${StepPlot} T=${solution.clFinal || solution.cl}/>
                   </div>
                 </div>
               </div>
